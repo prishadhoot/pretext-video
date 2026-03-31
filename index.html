@@ -3,7 +3,38 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>pretext.video</title>
+    <title>pretext.video — Turn Your Face into Living Typography</title>
+    <meta name="description" content="Transform your webcam into a real-time text portrait. Your face and body revealed through flowing literature — Shakespeare, Dickens, Homer. Record and export as video. Pure browser, no server needed." />
+    <link rel="canonical" href="https://pretext.video/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://pretext.video/" />
+    <meta property="og:title" content="pretext.video — Turn Your Face into Living Typography" />
+    <meta property="og:description" content="Transform your webcam into a real-time text portrait. Your face revealed through flowing literature. Record and export as video." />
+    <meta property="og:site_name" content="pretext.video" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="pretext.video — Turn Your Face into Living Typography" />
+    <meta name="twitter:description" content="Transform your webcam into a real-time text portrait. Record and export as video. Pure browser, no server." />
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "pretext.video",
+      "url": "https://pretext.video",
+      "description": "Transform your webcam into a real-time text portrait using Pretext text layout engine and MediaPipe face segmentation. Record and export as MP4 video.",
+      "applicationCategory": "MultimediaApplication",
+      "operatingSystem": "Web Browser",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "browserRequirements": "Requires a modern browser with WebCodecs support (Chrome, Edge)"
+    }
+    </script>
+
+    <!-- Analytics -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-6GFGR93TLG"></script>
     <script>
       window.dataLayer = window.dataLayer || [];
@@ -11,6 +42,8 @@
       gtag('js', new Date());
       gtag('config', 'G-6GFGR93TLG');
     </script>
+
+    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=Playfair+Display:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
