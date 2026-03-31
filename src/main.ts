@@ -28,6 +28,17 @@ const cameraBtn = document.getElementById('camera-btn') as HTMLButtonElement
 const recordBtn = document.getElementById('record-btn') as HTMLButtonElement
 const statusEl = document.getElementById('status') as HTMLDivElement
 
+const aboutBtn = document.getElementById('about-btn') as HTMLButtonElement
+const aboutPanel = document.getElementById('about-panel') as HTMLDivElement
+const aboutClose = document.getElementById('about-close') as HTMLButtonElement
+
+aboutBtn.addEventListener('click', () => {
+  aboutPanel.style.display = aboutPanel.style.display === 'none' ? 'block' : 'none'
+})
+aboutClose.addEventListener('click', () => {
+  aboutPanel.style.display = 'none'
+})
+
 let videoElement: HTMLVideoElement | null = null
 let cameraStream: MediaStream | null = null
 let detectionLoopId: number | null = null
