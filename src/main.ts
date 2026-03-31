@@ -43,6 +43,21 @@ let videoElement: HTMLVideoElement | null = null
 let cameraStream: MediaStream | null = null
 let detectionLoopId: number | null = null
 
+// --- Font preload: wait for Inter to load before preparing text ---
+async function waitForFonts() {
+  try {
+    await document.fonts.load('8px Inter')
+    await document.fonts.ready
+  } catch {
+    // Fonts API not available, proceed anyway
+  }
+}
+
+// --- WebCodecs compatibility check ---
+function supportsWebCodecs(): boolean {
+  return typeof VideoEncoder !== 'undefined'
+}
+
 // Populate text select
 for (const [key, { title }] of Object.entries(texts)) {
   const option = document.createElement('option')
@@ -56,11 +71,19 @@ customOption.textContent = 'Custom text...'
 textSelect.appendChild(customOption)
 textSelect.value = defaultTextKey
 
-// Init renderer
-initRenderer(canvas)
-setTextKey(defaultTextKey)
-setFontSize(parseInt(fontSizeSlider.value))
-startRenderLoop()
+// Init renderer after fonts are ready
+waitForFonts().then(() => {
+  initRenderer(canvas)
+  setTextKey(defaultTextKey)
+  setFontSize(parseInt(fontSizeSlider.value))
+  startRenderLoop()
+})
+
+// Disable record button on unsupported browsers
+if (!supportsWebCodecs()) {
+  recordBtn.disabled = true
+  recordBtn.title = 'Recording requires Chrome or Edge'
+}
 
 // Mode select
 modeSelect.addEventListener('change', () => {
@@ -141,20 +164,32 @@ async function startCamera() {
     setVideoElement(videoElement)
 
     // Load segmentation model (used by both modes)
+    showLoading('Loading AI models... This may take a moment.')
     await initSegmentation()
 
     hideLoading()
     statusEl.textContent = 'Camera active'
     cameraBtn.textContent = 'Stop Camera'
     cameraBtn.disabled = false
-    recordBtn.disabled = false
+    recordBtn.disabled = supportsWebCodecs() ? false : true
 
     // Start detection loop
     startDetectionLoop()
   } catch (err) {
     hideLoading()
-    console.error('Camera error:', err)
-    statusEl.textContent = `Camera error: ${(err as Error).message}`
+    const error = err as Error
+    console.error('Camera error:', error)
+
+    // Friendly error messages
+    if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+      statusEl.textContent = 'Camera permission denied. Please allow camera access and try again.'
+    } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+      statusEl.textContent = 'No camera found. Please connect a camera and try again.'
+    } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+      statusEl.textContent = 'Camera is in use by another app. Please close it and try again.'
+    } else {
+      statusEl.textContent = `Camera error: ${error.message}`
+    }
     cameraBtn.disabled = false
   }
 }
@@ -172,9 +207,9 @@ function stopCamera() {
   setVideoElement(null)
   setPersonMask(null)
 
-  cameraBtn.textContent = 'Start Camera'
+  cameraBtn.textContent = 'Camera'
   recordBtn.disabled = true
-  statusEl.textContent = 'Camera stopped'
+  statusEl.textContent = ''
 }
 
 function startDetectionLoop() {
@@ -186,7 +221,7 @@ function startDetectionLoop() {
       const dpr = window.devicePixelRatio || 1
       const mask = segmentPerson(videoElement, Math.round(rect.width * dpr), Math.round(rect.height * dpr))
       setPersonMask(mask)
-      statusEl.textContent = isRecording() ? '● Recording...' : 'Camera active'
+      statusEl.textContent = isRecording() ? '● Recording...' : ''
     }
 
     detectionLoopId = requestAnimationFrame(detect)
@@ -196,6 +231,11 @@ function startDetectionLoop() {
 
 // Record
 recordBtn.addEventListener('click', async () => {
+  if (!supportsWebCodecs()) {
+    statusEl.textContent = 'Recording requires Chrome or Edge browser'
+    return
+  }
+
   if (isRecording()) {
     recordBtn.disabled = true
     recordBtn.textContent = 'Saving...'
@@ -203,9 +243,10 @@ recordBtn.addEventListener('click', async () => {
     recordBtn.textContent = 'Record'
     recordBtn.disabled = false
     statusEl.textContent = 'Video saved!'
+    setTimeout(() => { if (!isRecording()) statusEl.textContent = '' }, 3000)
   } else {
     await startRecording(getCanvas())
-    recordBtn.textContent = 'Stop Recording'
+    recordBtn.textContent = 'Stop'
     statusEl.textContent = '● Recording...'
   }
 })
