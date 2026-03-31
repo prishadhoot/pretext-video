@@ -1,4 +1,5 @@
-import type { PositionedLine, AppMode } from './types'
+import type { AppMode } from './types'
+import { layoutNextLine, type LayoutCursor } from '@chenglou/pretext'
 import { getPrepared, layoutRectangular } from './text-layout'
 import { texts, defaultTextKey } from './texts'
 
@@ -11,13 +12,11 @@ let sampleCanvas: OffscreenCanvas | null = null
 let sampleCtx: OffscreenCanvasRenderingContext2D | null = null
 let sampleData: ImageData | null = null
 
-// Offscreen canvas for text rendering (before mask)
-let textCanvas: OffscreenCanvas | null = null
-let textCtx: OffscreenCanvasRenderingContext2D | null = null
-
-// Offscreen canvases for Mode 2
+// Offscreen canvases for cutout compositing
 let maskCanvas: OffscreenCanvas | null = null
 let maskCtx: OffscreenCanvasRenderingContext2D | null = null
+let tmpMaskCanvas: OffscreenCanvas | null = null
+let tmpMaskCtx: OffscreenCanvasRenderingContext2D | null = null
 
 // State
 let currentMode: AppMode = 'textface'
@@ -122,71 +121,49 @@ function samplePixel(x: number, y: number): { r: number; g: number; b: number; a
  */
 function isPersonAt(x: number, y: number, canvasW: number, canvasH: number): number {
   if (!personMask) return 0
-  // Mirror x to match the mirrored video frame (selfie mode)
   const mirroredX = canvasW - x
   const mx = Math.max(0, Math.min(Math.round((mirroredX / canvasW) * personMask.width), personMask.width - 1))
   const my = Math.max(0, Math.min(Math.round((y / canvasH) * personMask.height), personMask.height - 1))
   const idx = (my * personMask.width + mx) * 4
-  return personMask.data[idx + 3] / 255 // alpha channel holds confidence
+  return personMask.data[idx + 3] / 255
 }
 
 /**
- * Draw text covering the full canvas, colored by video pixels,
- * but only visible within the person mask area.
+ * Scan the person mask at a y range to find the horizontal bounds of the person.
+ * Samples at multiple y positions within the line for accuracy.
  */
-function drawPersonTextLines(lines: PositionedLine[], w: number, h: number) {
-  // Prepare text offscreen canvas
-  const dpr = window.devicePixelRatio || 1
-  const cw = Math.round(w * dpr)
-  const ch = Math.round(h * dpr)
-  if (!textCanvas || textCanvas.width !== cw || textCanvas.height !== ch) {
-    textCanvas = new OffscreenCanvas(cw, ch)
-    textCtx = textCanvas.getContext('2d')!
-  }
+function getPersonBoundsAtY(yStart: number, yEnd: number, canvasW: number, canvasH: number): { left: number; right: number } | null {
+  if (!personMask) return null
 
-  textCtx!.clearRect(0, 0, cw, ch)
-  textCtx!.scale(dpr, dpr)
-  textCtx!.font = font
-  textCtx!.textBaseline = 'top'
+  let globalLeft = canvasW
+  let globalRight = 0
+  let found = false
 
-  // Draw each character with color from video
-  for (const line of lines) {
-    let charX = line.x
-    for (const char of line.text) {
-      const charW = textCtx!.measureText(char).width
-      const centerX = charX + charW / 2
-      const centerY = line.y + lineHeight / 2
+  const step = Math.max(2, Math.floor(canvasW / 150))
 
-      // Check person mask — skip if not a person pixel
-      const personConf = isPersonAt(centerX, centerY, w, h)
-      if (personConf < 0.3) {
-        charX += charW
-        continue
+  for (const y of [yStart, (yStart + yEnd) / 2, yEnd]) {
+    const my = Math.max(0, Math.min(Math.round((y / canvasH) * personMask.height), personMask.height - 1))
+
+    for (let x = 0; x < canvasW; x += step) {
+      const mirroredX = canvasW - x
+      const mx = Math.max(0, Math.min(Math.round((mirroredX / canvasW) * personMask.width), personMask.width - 1))
+      const idx = (my * personMask.width + mx) * 4
+      const confidence = personMask.data[idx + 3] / 255
+
+      if (confidence > 0.5) {
+        if (x < globalLeft) globalLeft = x
+        if (x > globalRight) globalRight = x
+        found = true
       }
-
-      // Sample video pixel color
-      const { r, g, b, lum } = samplePixel(centerX, centerY)
-
-      // Alpha: darker areas → more opaque, lighter areas → less opaque
-      // Also factor in person confidence for soft edges
-      const lumAlpha = Math.pow(1 - lum, 0.6)
-      const alpha = Math.max(0.08, lumAlpha * personConf)
-
-      // Use the sampled color (slightly darkened for contrast)
-      const dr = Math.round(r * 0.4)
-      const dg = Math.round(g * 0.4)
-      const db = Math.round(b * 0.4)
-
-      textCtx!.fillStyle = `rgba(${dr},${dg},${db},${alpha})`
-      textCtx!.fillText(char, charX, line.y)
-      charX += charW
     }
   }
 
-  // Reset transform and draw to main canvas
-  textCtx!.setTransform(1, 0, 0, 1, 0, 0)
-  ctx.drawImage(textCanvas!, 0, 0, cw, ch, 0, 0, w, h)
+  if (!found || globalRight - globalLeft < 10) return null
+  return { left: globalLeft, right: globalRight }
 }
+
+// ─── Text Face Mode ─────────────────────────────────────────────
+
 
 function renderTextFaceMode() {
   const rect = canvas.getBoundingClientRect()
@@ -201,92 +178,104 @@ function renderTextFaceMode() {
   updateFont()
 
   if (sampleData && personMask) {
-    // Camera active: dense text covering full canvas, masked to person shape
-    // Repeat text many times so it fills the entire area
+    // Layout text INSIDE person shape using variable-width reflow
+    const innerMargin = fontSize * 0.3
     const charsNeeded = Math.ceil((w * h) / (fontSize * fontSize * 0.3))
     const repeatedText = getRepeatedText(baseText, charsNeeded)
     const prepared = getPrepared(repeatedText, font)
-
-    const padding = 4
-    const lines = layoutRectangular(prepared, w - padding * 2, lineHeight, padding, padding)
-    drawPersonTextLines(lines, w, h)
-  } else {
-    // No camera: elegant full-canvas typographic composition
-    // Dense repeated text filling the entire canvas with varying opacity
-    const charsNeeded = Math.ceil((w * h) / (fontSize * fontSize * 0.3))
-    const repeatedText = getRepeatedText(baseText, charsNeeded)
-    const prepared = getPrepared(repeatedText, font)
-
-    const padding = 4
-    const lines = layoutRectangular(prepared, w - padding * 2, lineHeight, padding, padding)
 
     ctx.font = font
     ctx.textBaseline = 'top'
 
-    // Draw with radial gradient opacity — denser in center, fading at edges
-    const cx = w / 2
-    const cy = h / 2
-    const maxDist = Math.sqrt(cx * cx + cy * cy)
+    let cursor: LayoutCursor = { segmentIndex: 0, graphemeIndex: 0 }
 
-    for (const line of lines) {
-      let charX = line.x
+    for (let y = 0; y + lineHeight <= h; y += lineHeight) {
+      const bounds = getPersonBoundsAtY(y, y + lineHeight, w, h)
+      if (!bounds) continue
+
+      const availWidth = bounds.right - bounds.left - innerMargin * 2
+      if (availWidth < fontSize * 3) continue
+
+      const line = layoutNextLine(prepared, cursor, availWidth)
+      if (!line) break
+
+      // Draw each character colored by video pixel
+      let charX = bounds.left + innerMargin
       for (const char of line.text) {
         const charW = ctx.measureText(char).width
-        const dx = (charX + charW / 2) - cx
-        const dy = (line.y + lineHeight / 2) - cy
-        const dist = Math.sqrt(dx * dx + dy * dy)
-        const t = dist / maxDist
+        const centerX = charX + charW / 2
+        const centerY = y + lineHeight / 2
 
-        // Center: opaque dark. Edges: very faint
-        const alpha = Math.max(0.03, Math.pow(1 - t, 2.5) * 0.85)
-        const gray = Math.round(30 + t * 60)
-        ctx.fillStyle = `rgba(${gray},${gray},${gray},${alpha})`
-        ctx.fillText(char, charX, line.y)
+        const { r, g, b, lum } = samplePixel(centerX, centerY)
+        const personConf = isPersonAt(centerX, centerY, w, h)
+        const lumAlpha = Math.pow(1 - lum, 0.6)
+        const alpha = Math.max(0.05, lumAlpha * Math.min(1, personConf * 1.5))
+
+        const dr = Math.round(r * 0.4)
+        const dg = Math.round(g * 0.4)
+        const db = Math.round(b * 0.4)
+
+        ctx.fillStyle = `rgba(${dr},${dg},${db},${alpha})`
+        ctx.fillText(char, charX, y)
         charX += charW
       }
+
+      cursor = line.end
     }
+  } else {
+    renderEditorialLayout(w, h)
   }
 }
 
-/**
- * Check if any sample point in a surrounding area hits the person mask.
- * This creates a wider "exclusion zone" around the person so text stays further away.
- */
-function isNearPerson(x: number, y: number, w: number, h: number, margin: number): boolean {
-  // Check the center point and several points within the margin
-  for (let dy = -margin; dy <= margin; dy += margin) {
-    for (let dx = -margin; dx <= margin; dx += margin) {
-      if (isPersonAt(x + dx, y + dy, w, h) > 0.3) return true
-    }
-  }
-  return false
-}
+// ─── Cutout Mode ────────────────────────────────────────────────
 
 /**
- * Draw text lines but skip characters that are near the person area.
- * Text "flows around" the person cutout with a visible gap.
+ * Draw the person cutout overlay with soft edges.
  */
-function drawTextAvoidingPerson(lines: PositionedLine[], w: number, h: number) {
-  ctx.font = font
-  ctx.fillStyle = '#1a1a1a'
-  ctx.textBaseline = 'top'
+function drawPersonCutout(w: number, h: number) {
+  if (!personMask || !videoElement || videoElement.readyState < 2) return
 
-  // Margin in pixels — how far text stays from the person edge
-  const margin = Math.max(fontSize * 2, 16)
+  const dpr = window.devicePixelRatio || 1
+  const cw = canvas.width
+  const ch = canvas.height
 
-  for (const line of lines) {
-    let charX = line.x
-    for (const char of line.text) {
-      const charW = ctx.measureText(char).width
-      const centerX = charX + charW / 2
-      const centerY = line.y + lineHeight / 2
-
-      if (!isNearPerson(centerX, centerY, w, h, margin)) {
-        ctx.fillText(char, charX, line.y)
-      }
-      charX += charW
-    }
+  if (!maskCanvas || maskCanvas.width !== cw || maskCanvas.height !== ch) {
+    maskCanvas = new OffscreenCanvas(cw, ch)
+    maskCtx = maskCanvas.getContext('2d')!
   }
+
+  // Reuse tmp canvas for mask ImageData
+  const maskW = personMask.width
+  const maskH = personMask.height
+  if (!tmpMaskCanvas || tmpMaskCanvas.width !== maskW || tmpMaskCanvas.height !== maskH) {
+    tmpMaskCanvas = new OffscreenCanvas(maskW, maskH)
+    tmpMaskCtx = tmpMaskCanvas.getContext('2d')!
+  }
+  tmpMaskCtx!.putImageData(personMask, 0, 0)
+
+  // Draw mask mirrored with blur for soft edges
+  maskCtx!.clearRect(0, 0, cw, ch)
+  maskCtx!.imageSmoothingEnabled = true
+  maskCtx!.imageSmoothingQuality = 'high'
+  maskCtx!.filter = 'blur(4px)'
+  maskCtx!.save()
+  maskCtx!.translate(cw, 0)
+  maskCtx!.scale(-1, 1)
+  maskCtx!.drawImage(tmpMaskCanvas!, 0, 0, cw, ch)
+  maskCtx!.restore()
+  maskCtx!.filter = 'none'
+
+  // Draw mirrored video using source-in (only person area shows)
+  maskCtx!.globalCompositeOperation = 'source-in'
+  maskCtx!.save()
+  maskCtx!.scale(dpr, dpr)
+  maskCtx!.translate(w, 0)
+  maskCtx!.scale(-1, 1)
+  maskCtx!.drawImage(videoElement!, 0, 0, w, h)
+  maskCtx!.restore()
+  maskCtx!.globalCompositeOperation = 'source-over'
+
+  ctx.drawImage(maskCanvas!, 0, 0, cw, ch, 0, 0, w, h)
 }
 
 function renderCutoutMode() {
@@ -299,7 +288,78 @@ function renderCutoutMode() {
 
   updateFont()
 
-  // Repeat text to fill full canvas
+  if (personMask && videoElement && videoElement.readyState >= 2) {
+    // ── Reflow text around person using layoutNextLine() ──
+    const margin = Math.max(fontSize * 2, 20)
+    const padding = 4
+    const charsNeeded = Math.ceil((w * h) / (fontSize * fontSize * 0.3))
+    const repeatedText = getRepeatedText(baseText, charsNeeded)
+    const prepared = getPrepared(repeatedText, font)
+
+    ctx.font = font
+    ctx.fillStyle = '#1a1a1a'
+    ctx.textBaseline = 'top'
+
+    let leftCursor: LayoutCursor = { segmentIndex: 0, graphemeIndex: 0 }
+    let rightCursor: LayoutCursor = { segmentIndex: 0, graphemeIndex: 0 }
+
+    // Pre-advance right cursor so both sides show different text
+    const advanceLines = Math.ceil(h / lineHeight)
+    for (let i = 0; i < advanceLines; i++) {
+      const line = layoutNextLine(prepared, rightCursor, w * 0.4)
+      if (!line) { rightCursor = { segmentIndex: 0, graphemeIndex: 0 }; break }
+      rightCursor = line.end
+    }
+
+    for (let y = padding; y + lineHeight <= h; y += lineHeight) {
+      const bounds = getPersonBoundsAtY(y, y + lineHeight, w, h)
+
+      if (!bounds) {
+        // No person at this line — full width
+        const line = layoutNextLine(prepared, leftCursor, w - padding * 2)
+        if (!line) break
+        ctx.fillText(line.text, padding, y)
+        leftCursor = line.end
+      } else {
+        const leftWidth = bounds.left - margin - padding
+        const rightWidth = w - bounds.right - margin - padding
+
+        // Left side (skip if too narrow for readable text)
+        if (leftWidth > fontSize * 8) {
+          const line = layoutNextLine(prepared, leftCursor, leftWidth)
+          if (line) {
+            ctx.fillText(line.text, padding, y)
+            leftCursor = line.end
+          }
+        }
+
+        // Right side
+        if (rightWidth > fontSize * 8) {
+          const line = layoutNextLine(prepared, rightCursor, rightWidth)
+          if (line) {
+            ctx.fillText(line.text, bounds.right + margin, y)
+            rightCursor = line.end
+          }
+        }
+      }
+    }
+
+    // Overlay person cutout with soft edges
+    drawPersonCutout(w, h)
+  } else {
+    renderEditorialLayout(w, h)
+  }
+}
+
+// ─── Editorial Layout (no camera) ──────────────────────────────
+
+function renderEditorialLayout(w: number, h: number) {
+  const baseText = getCurrentText()
+  if (!baseText) return
+
+  updateFont()
+
+  // Dense repeated text filling entire canvas
   const charsNeeded = Math.ceil((w * h) / (fontSize * fontSize * 0.3))
   const repeatedText = getRepeatedText(baseText, charsNeeded)
   const prepared = getPrepared(repeatedText, font)
@@ -307,59 +367,33 @@ function renderCutoutMode() {
   const padding = 4
   const lines = layoutRectangular(prepared, w - padding * 2, lineHeight, padding, padding)
 
-  if (personMask && videoElement && videoElement.readyState >= 2) {
-    // Draw text everywhere EXCEPT where person is
-    drawTextAvoidingPerson(lines, w, h)
+  ctx.font = font
+  ctx.textBaseline = 'top'
 
-    // Overlay person cutout on top:
-    // 1. Draw mask as image (need a temp canvas to hold it)
-    // 2. Draw mirrored video using 'source-in' so only person area shows
-    const dpr = window.devicePixelRatio || 1
-    const cw = canvas.width
-    const ch = canvas.height
-    if (!maskCanvas || maskCanvas.width !== cw || maskCanvas.height !== ch) {
-      maskCanvas = new OffscreenCanvas(cw, ch)
-      maskCtx = maskCanvas.getContext('2d')!
-    }
+  // Radial gradient: center opaque, edges fade out
+  const cx = w / 2
+  const cy = h / 2
+  const maxDist = Math.sqrt(cx * cx + cy * cy)
 
-    // Step 1: Put the mask into a temp canvas, mirrored to match video
-    // Create a small temp canvas at mask resolution to hold the ImageData
-    const maskW = personMask.width
-    const maskH = personMask.height
-    const tmpMask = new OffscreenCanvas(maskW, maskH)
-    const tmpCtx = tmpMask.getContext('2d')!
-    tmpCtx.putImageData(personMask, 0, 0)
+  for (const line of lines) {
+    let charX = line.x
+    for (const char of line.text) {
+      const charW = ctx.measureText(char).width
+      const dx = (charX + charW / 2) - cx
+      const dy = (line.y + lineHeight / 2) - cy
+      const dist = Math.sqrt(dx * dx + dy * dy)
+      const t = dist / maxDist
 
-    // Step 2: Draw mask mirrored onto maskCanvas
-    maskCtx!.clearRect(0, 0, cw, ch)
-    maskCtx!.save()
-    maskCtx!.translate(cw, 0)
-    maskCtx!.scale(-1, 1)
-    maskCtx!.drawImage(tmpMask, 0, 0, cw, ch)
-    maskCtx!.restore()
-
-    // Step 3: Draw mirrored video, but only where mask is (source-in)
-    maskCtx!.globalCompositeOperation = 'source-in'
-    maskCtx!.save()
-    maskCtx!.scale(dpr, dpr)
-    maskCtx!.translate(w, 0)
-    maskCtx!.scale(-1, 1)
-    maskCtx!.drawImage(videoElement, 0, 0, w, h)
-    maskCtx!.restore()
-    maskCtx!.globalCompositeOperation = 'source-over'
-
-    // Step 4: Draw the cutout onto main canvas
-    ctx.drawImage(maskCanvas!, 0, 0, cw, ch, 0, 0, w, h)
-  } else {
-    // No camera: just draw all text normally
-    ctx.font = font
-    ctx.fillStyle = '#1a1a1a'
-    ctx.textBaseline = 'top'
-    for (const line of lines) {
-      ctx.fillText(line.text, line.x, line.y)
+      const alpha = Math.max(0.03, Math.pow(1 - t, 2.5) * 0.85)
+      const gray = Math.round(30 + t * 60)
+      ctx.fillStyle = `rgba(${gray},${gray},${gray},${alpha})`
+      ctx.fillText(char, charX, line.y)
+      charX += charW
     }
   }
 }
+
+// ─── Render Loop ────────────────────────────────────────────────
 
 function render() {
   const rect = canvas.getBoundingClientRect()

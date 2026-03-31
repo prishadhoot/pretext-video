@@ -44,6 +44,8 @@ export async function startRecording(canvas: HTMLCanvasElement): Promise<void> {
   })
   output.addVideoTrack(videoSource, { frameRate: FRAME_RATE })
 
+  // Yield to let the UI update before the potentially heavy encoder init
+  await new Promise(r => requestAnimationFrame(r))
   await output.start()
 
   startTime = performance.now()

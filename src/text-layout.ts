@@ -7,18 +7,18 @@ import {
 } from '@chenglou/pretext'
 import type { Point, PositionedLine } from './types'
 
-let cachedText = ''
-let cachedFont = ''
-let cachedPrepared: PreparedTextWithSegments | null = null
+const preparedCache = new Map<string, PreparedTextWithSegments>()
 
 export function getPrepared(text: string, font: string): PreparedTextWithSegments {
-  if (text === cachedText && font === cachedFont && cachedPrepared) {
-    return cachedPrepared
+  const key = font + '\0' + text.length + '\0' + text.slice(0, 200)
+  const cached = preparedCache.get(key)
+  if (cached) return cached
+  const prepared = prepareWithSegments(text, font)
+  if (preparedCache.size > 8) {
+    preparedCache.delete(preparedCache.keys().next().value!)
   }
-  cachedText = text
-  cachedFont = font
-  cachedPrepared = prepareWithSegments(text, font)
-  return cachedPrepared
+  preparedCache.set(key, prepared)
+  return prepared
 }
 
 /**

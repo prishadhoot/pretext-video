@@ -65,10 +65,10 @@ function supportsWebCodecs(): boolean {
 }
 
 // Populate text select
-for (const [key, { title }] of Object.entries(texts)) {
+for (const [key, { title, author }] of Object.entries(texts)) {
   const option = document.createElement('option')
   option.value = key
-  option.textContent = title
+  option.textContent = `${author} — ${title}`
   textSelect.appendChild(option)
 }
 const customOption = document.createElement('option')
@@ -77,12 +77,15 @@ customOption.textContent = 'Custom text...'
 textSelect.appendChild(customOption)
 textSelect.value = defaultTextKey
 
-// Init renderer after fonts are ready
-waitForFonts().then(() => {
+// Init renderer after fonts are ready, then auto-start camera + model
+waitForFonts().then(async () => {
   initRenderer(canvas)
   setTextKey(defaultTextKey)
   setFontSize(parseInt(fontSizeSlider.value))
   startRenderLoop()
+
+  // Auto-start camera and preload AI model on page load
+  await startCamera()
 })
 
 // Disable record button on unsupported browsers
@@ -154,14 +157,24 @@ function hideLoading() {
 
 async function startCamera() {
   cameraBtn.disabled = true
-  showLoading('Loading AI models...')
-  statusEl.textContent = 'Loading AI models...'
+  showLoading('Starting camera & loading AI models...')
+  statusEl.textContent = 'Starting...'
 
   try {
-    // Start camera
-    cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: 1280, height: 720 },
-    })
+    // Request camera and load AI model in parallel
+    const isPortrait = window.innerHeight > window.innerWidth
+    const [stream] = await Promise.all([
+      navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          width: isPortrait ? 720 : 1280,
+          height: isPortrait ? 1280 : 720,
+        },
+      }),
+      initSegmentation(),
+    ])
+
+    cameraStream = stream
     videoElement = document.createElement('video')
     videoElement.srcObject = cameraStream
     videoElement.muted = true
@@ -169,10 +182,6 @@ async function startCamera() {
     await videoElement.play()
 
     setVideoElement(videoElement)
-
-    // Load segmentation model (used by both modes)
-    showLoading('Loading AI models... This may take a moment.')
-    await initSegmentation()
 
     hideLoading()
     trackEvent('camera_started')
@@ -254,9 +263,14 @@ recordBtn.addEventListener('click', async () => {
     statusEl.textContent = 'Video saved!'
     setTimeout(() => { if (!isRecording()) statusEl.textContent = '' }, 3000)
   } else {
+    recordBtn.textContent = 'Starting...'
+    recordBtn.disabled = true
+    // Yield a frame so the button text updates before encoder init
+    await new Promise(r => requestAnimationFrame(r))
     await startRecording(getCanvas())
     trackEvent('recording_started')
     recordBtn.textContent = 'Stop'
+    recordBtn.disabled = false
     statusEl.textContent = '● Recording...'
   }
 })
