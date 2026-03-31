@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>pretext.video</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=Playfair+Display:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="canvas-container">
+        <canvas id="main-canvas"></canvas>
+      </div>
+
+      <div id="toolbar">
+        <div class="toolbar-left">
+          <h1>pretext.video</h1>
+        </div>
+
+        <div class="toolbar-center">
+          <select id="mode-select" title="Mode">
+            <option value="textface">Text Face</option>
+            <option value="cutout">Cutout in Text</option>
+          </select>
+
+          <select id="text-select" title="Text"></select>
+
+          <div class="range-wrap">
+            <input type="range" id="font-size" min="4" max="24" value="8" step="1" title="Font size" />
+            <span id="font-size-label">8</span>
+          </div>
+        </div>
+
+        <div class="toolbar-right">
+          <span id="status"></span>
+          <button id="camera-btn" type="button">Camera</button>
+          <button id="record-btn" type="button" disabled>Record</button>
+        </div>
+      </div>
+
+      <div id="custom-text-wrap" style="display: none;">
+        <textarea id="custom-text" placeholder="Enter your text here..."></textarea>
+        <button id="custom-text-close" type="button" title="Close">&times;</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
