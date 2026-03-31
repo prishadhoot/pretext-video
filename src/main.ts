@@ -15,6 +15,12 @@ import { texts, defaultTextKey } from './texts'
 import type { AppMode } from './types'
 import './style.css'
 
+// GA event helper
+declare global { interface Window { gtag?: (...args: unknown[]) => void } }
+function trackEvent(action: string, params?: Record<string, string | number>) {
+  window.gtag?.('event', action, params)
+}
+
 // DOM elements
 const canvas = document.getElementById('main-canvas') as HTMLCanvasElement
 const modeSelect = document.getElementById('mode-select') as HTMLSelectElement
@@ -88,6 +94,7 @@ if (!supportsWebCodecs()) {
 // Mode select
 modeSelect.addEventListener('change', () => {
   setMode(modeSelect.value as AppMode)
+  trackEvent('switch_mode', { mode: modeSelect.value })
 })
 
 // Text select
@@ -168,6 +175,7 @@ async function startCamera() {
     await initSegmentation()
 
     hideLoading()
+    trackEvent('camera_started')
     statusEl.textContent = 'Camera active'
     cameraBtn.textContent = 'Stop Camera'
     cameraBtn.disabled = false
@@ -240,12 +248,14 @@ recordBtn.addEventListener('click', async () => {
     recordBtn.disabled = true
     recordBtn.textContent = 'Saving...'
     await stopRecording()
+    trackEvent('recording_saved')
     recordBtn.textContent = 'Record'
     recordBtn.disabled = false
     statusEl.textContent = 'Video saved!'
     setTimeout(() => { if (!isRecording()) statusEl.textContent = '' }, 3000)
   } else {
     await startRecording(getCanvas())
+    trackEvent('recording_started')
     recordBtn.textContent = 'Stop'
     statusEl.textContent = '● Recording...'
   }
