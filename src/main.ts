@@ -95,8 +95,25 @@ cameraBtn.addEventListener('click', async () => {
   await startCamera()
 })
 
+function showLoading(msg: string) {
+  let overlay = document.getElementById('loading-overlay')
+  if (!overlay) {
+    overlay = document.createElement('div')
+    overlay.id = 'loading-overlay'
+    document.getElementById('canvas-container')!.appendChild(overlay)
+  }
+  overlay.textContent = msg
+  overlay.style.display = 'flex'
+}
+
+function hideLoading() {
+  const overlay = document.getElementById('loading-overlay')
+  if (overlay) overlay.style.display = 'none'
+}
+
 async function startCamera() {
   cameraBtn.disabled = true
+  showLoading('Loading AI models...')
   statusEl.textContent = 'Loading AI models...'
 
   try {
@@ -115,6 +132,7 @@ async function startCamera() {
     // Load segmentation model (used by both modes)
     await initSegmentation()
 
+    hideLoading()
     statusEl.textContent = 'Camera active'
     cameraBtn.textContent = 'Stop Camera'
     cameraBtn.disabled = false
@@ -123,6 +141,7 @@ async function startCamera() {
     // Start detection loop
     startDetectionLoop()
   } catch (err) {
+    hideLoading()
     console.error('Camera error:', err)
     statusEl.textContent = `Camera error: ${(err as Error).message}`
     cameraBtn.disabled = false

@@ -31,6 +31,29 @@ body {
   display: block;
 }
 
+/* Loading overlay */
+#loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(245, 243, 239, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-family: 'Playfair Display', serif;
+  font-size: 18px;
+  color: #1a1a1a;
+  letter-spacing: 0.5px;
+  z-index: 5;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
 /* Toolbar — floating bar at the bottom */
 #toolbar {
   position: fixed;
