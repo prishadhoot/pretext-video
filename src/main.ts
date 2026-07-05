@@ -9,7 +9,7 @@ import {
   setPersonMask,
   getCanvas,
 } from './renderer'
-import { initRevolver, getRevolverBounds, fire } from './revolver'
+import { initRevolver, getRevolverBounds, fire, setRevolverPosition, setParticleFontSize } from './revolver'
 import { initSegmentation, segmentPerson, isSegmentationReady } from './segmentation'
 import { startRecording, stopRecording, isRecording } from './recorder'
 import { texts, defaultTextKey } from './texts'
@@ -82,7 +82,9 @@ textSelect.value = defaultTextKey
 waitForFonts().then(async () => {
   initRenderer(canvas)
   setTextKey(defaultTextKey)
-  setFontSize(parseInt(fontSizeSlider.value))
+  const initFontSize = parseInt(fontSizeSlider.value)
+  setFontSize(initFontSize)
+  setParticleFontSize(initFontSize)
   initRevolver('/revolver.webp')
   startRenderLoop()
 
@@ -97,22 +99,65 @@ function getCanvasCSSCoords(e: PointerEvent): { x: number; y: number } {
   return { x: e.clientX - rect.left, y: e.clientY - rect.top }
 }
 
+let isDraggingRevolver = false
+let dragOffsetX = 0
+let dragOffsetY = 0
+let dragStartX = 0
+let dragStartY = 0
+const DRAG_THRESHOLD = 5 // px of movement before we treat as drag
+
 canvas.addEventListener('pointerdown', (e: PointerEvent) => {
   const { x, y } = getCanvasCSSCoords(e)
   const b = getRevolverBounds()
-  // Expand hit area slightly for easier clicking
   const hit = x >= b.x - 8 && x <= b.x + b.w + 8 && y >= b.y - 8 && y <= b.y + b.h + 8
   if (hit) {
     e.preventDefault()
-    fire()
+    canvas.setPointerCapture(e.pointerId)
+    isDraggingRevolver = false
+    dragStartX = x
+    dragStartY = y
+    dragOffsetX = x - b.x
+    dragOffsetY = y - b.y
   }
 })
 
 canvas.addEventListener('pointermove', (e: PointerEvent) => {
   const { x, y } = getCanvasCSSCoords(e)
+
+  if (e.buttons > 0 && Math.abs(x - dragStartX) + Math.abs(y - dragStartY) > DRAG_THRESHOLD) {
+    const b = getRevolverBounds()
+    const wasInBounds =
+      dragStartX >= b.x - 8 && dragStartX <= b.x + b.w + 8 &&
+      dragStartY >= b.y - 8 && dragStartY <= b.y + b.h + 8
+    if (wasInBounds || isDraggingRevolver) {
+      isDraggingRevolver = true
+      setRevolverPosition(x - dragOffsetX, y - dragOffsetY)
+      canvas.style.cursor = 'grabbing'
+      return
+    }
+  }
+
   const b = getRevolverBounds()
   const over = x >= b.x - 8 && x <= b.x + b.w + 8 && y >= b.y - 8 && y <= b.y + b.h + 8
-  canvas.style.cursor = over ? 'pointer' : ''
+  canvas.style.cursor = over ? (isDraggingRevolver ? 'grabbing' : 'grab') : ''
+})
+
+canvas.addEventListener('pointerup', (e: PointerEvent) => {
+  const { x, y } = getCanvasCSSCoords(e)
+  const moved = Math.abs(x - dragStartX) + Math.abs(y - dragStartY)
+
+  if (!isDraggingRevolver && moved <= DRAG_THRESHOLD) {
+    // It was a tap/click, not a drag → fire
+    const b = getRevolverBounds()
+    const hit = dragStartX >= b.x - 8 && dragStartX <= b.x + b.w + 8 &&
+                dragStartY >= b.y - 8 && dragStartY <= b.y + b.h + 8
+    if (hit) fire()
+  }
+
+  isDraggingRevolver = false
+  const b = getRevolverBounds()
+  const over = x >= b.x - 8 && x <= b.x + b.w + 8 && y >= b.y - 8 && y <= b.y + b.h + 8
+  canvas.style.cursor = over ? 'grab' : ''
 })
 
 // Disable record button on unsupported browsers
@@ -154,6 +199,7 @@ textSelect.addEventListener('click', () => {
 fontSizeSlider.addEventListener('input', () => {
   const size = parseInt(fontSizeSlider.value)
   setFontSize(size)
+  setParticleFontSize(size)
   fontSizeLabel.textContent = `${size}px`
 })
 

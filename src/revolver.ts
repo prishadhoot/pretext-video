@@ -1,5 +1,5 @@
 /**
- * Revolver: clickable gun with negative-space bullet, recoil, muzzle flash,
+ * Revolver: draggable gun with negative-space bullet, recoil, muzzle flash,
  * and text-glyph exit burst. All animation is driven by the main render loop
  * via updateAndDrawEffects(); no separate rAF loop is used.
  */
@@ -50,6 +50,13 @@ let revolverY = 0
 let revolverW = 0
 let revolverH = 0
 
+// User-dragged position (null = use default bottom-right)
+let userPinnedX: number | null = null
+let userPinnedY: number | null = null
+
+// Font size to match on-screen text
+let particleFontSize = 8
+
 // Muzzle tip position relative to revolver rect (fraction of W/H)
 // The image faces left: barrel exit is at the left-center
 const MUZZLE_REL_X = 0.03   // 3% from left edge
@@ -76,6 +83,15 @@ export function setRevolverText(text: string): void {
   if (!text) return
   // Collect unique printable non-space chars for particles
   currentTextChars = Array.from(new Set(text.replace(/\s+/g, ''))).filter(c => c.trim().length > 0)
+}
+
+export function setParticleFontSize(size: number): void {
+  particleFontSize = size
+}
+
+export function setRevolverPosition(x: number, y: number): void {
+  userPinnedX = x
+  userPinnedY = y
 }
 
 export function getRevolverBounds(): { x: number; y: number; w: number; h: number } {
@@ -142,8 +158,15 @@ function layoutRevolver(w: number, h: number): void {
   revolverW = Math.min(180, w * 0.22)
   revolverH = revolverW * 0.72   // aspect ratio from image
   const margin = 16
-  revolverX = w - revolverW - margin
-  revolverY = h - revolverH - margin
+
+  if (userPinnedX !== null && userPinnedY !== null) {
+    // Clamp to canvas bounds so revolver stays visible
+    revolverX = Math.max(0, Math.min(userPinnedX, w - revolverW))
+    revolverY = Math.max(0, Math.min(userPinnedY, h - revolverH))
+  } else {
+    revolverX = w - revolverW - margin
+    revolverY = h - revolverH - margin
+  }
 }
 
 // ─── Bullet update ───────────────────────────────────────────────────────────
@@ -169,8 +192,8 @@ function updateBullets(dt: number, w: number, h: number, confAt: (x: number, y: 
     const isInsideNow = conf > 0.45
 
     if (b.wasInsidePerson && !isInsideNow) {
-      // Exited person silhouette → burst
-      spawnExitBurst(b.x, b.y)
+      // Exited person silhouette → directional burst + tear
+      spawnExitBurst(b.x, b.y, b.vx, b.vy)
     }
     b.wasInsidePerson = isInsideNow
 
@@ -205,6 +228,7 @@ function randomChar(): string {
 
 function spawnMuzzleFlash(mx: number, my: number): void {
   const count = 10
+  const baseSize = particleFontSize
   for (let i = 0; i < count; i++) {
     // Cone pointing left (angles around π, ±45°)
     const baseAngle = Math.PI
@@ -219,7 +243,7 @@ function spawnMuzzleFlash(mx: number, my: number): void {
       vy: Math.sin(angle) * speed,
       angle: Math.random() * Math.PI * 2,
       spin: (Math.random() - 0.5) * 8,
-      size: 8 + Math.random() * 16,
+      size: baseSize * (0.7 + Math.random() * 0.6),
       alpha: 1,
       life: 0.55 + Math.random() * 0.25,
       color: '#1a1a1a',
@@ -228,24 +252,76 @@ function spawnMuzzleFlash(mx: number, my: number): void {
   }
 }
 
-function spawnExitBurst(ex: number, ey: number): void {
-  const count = 16
-  for (let i = 0; i < count; i++) {
-    const angle = (i / count) * Math.PI * 2 + Math.random() * 0.3
-    const speed = 140 + Math.random() * 260
+function spawnExitBurst(ex: number, ey: number, bulletVx: number, bulletVy: number): void {
+  const bulletAngle = Math.atan2(bulletVy, bulletVx) // direction of travel
+  const baseSize = particleFontSize
+
+  // ── Main spray: fan in the bullet's forward direction ──────────────────────
+  // Spray cone is ±70° around bullet direction (mostly forward, not firework)
+  const sprayCone = (Math.PI * 70) / 180
+  const sprayCount = 18
+  for (let i = 0; i < sprayCount; i++) {
+    const angle = bulletAngle + (Math.random() * 2 - 1) * sprayCone
+    const speed = 160 + Math.random() * 300
     particles.push({
       char: randomChar(),
-      x: ex + (Math.random() - 0.5) * 8,
-      y: ey + (Math.random() - 0.5) * 8,
+      x: ex + (Math.random() - 0.5) * 6,
+      y: ey + (Math.random() - 0.5) * 6,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
       angle: Math.random() * Math.PI * 2,
-      spin: (Math.random() - 0.5) * 12,
-      size: 10 + Math.random() * 20,
+      spin: (Math.random() - 0.5) * 10,
+      size: baseSize * (0.8 + Math.random() * 0.7),
       alpha: 1,
-      life: 0.7 + Math.random() * 0.4,
+      life: 0.6 + Math.random() * 0.5,
       color: '#1a1a1a',
       gravity: 90,
+    })
+  }
+
+  // ── Tear letters: fast particles tight to bullet direction ─────────────────
+  // These simulate text being ripped out — tightly clustered forward spray
+  const tearCount = 6
+  for (let i = 0; i < tearCount; i++) {
+    const tearAngle = bulletAngle + (Math.random() * 2 - 1) * (Math.PI * 0.2)
+    const speed = 350 + Math.random() * 350
+    // Offset them slightly behind the exit point (inside the object edge)
+    const offsetDist = Math.random() * 14
+    particles.push({
+      char: randomChar(),
+      x: ex - Math.cos(bulletAngle) * offsetDist + (Math.random() - 0.5) * 10,
+      y: ey - Math.sin(bulletAngle) * offsetDist + (Math.random() - 0.5) * 10,
+      vx: Math.cos(tearAngle) * speed,
+      vy: Math.sin(tearAngle) * speed,
+      angle: Math.random() * Math.PI * 2,
+      spin: (Math.random() - 0.5) * 14,
+      size: baseSize * (1.0 + Math.random() * 0.8),
+      alpha: 1,
+      life: 0.8 + Math.random() * 0.5,
+      color: '#1a1a1a',
+      gravity: 70,
+    })
+  }
+
+  // ── Side scatter: a few letters perpendicular to bullet for "shrapnel" ─────
+  const sideCount = 4
+  for (let i = 0; i < sideCount; i++) {
+    const sideSign = i % 2 === 0 ? 1 : -1
+    const sideAngle = bulletAngle + sideSign * (Math.PI * 0.5 + Math.random() * 0.4)
+    const speed = 100 + Math.random() * 180
+    particles.push({
+      char: randomChar(),
+      x: ex + (Math.random() - 0.5) * 12,
+      y: ey + (Math.random() - 0.5) * 12,
+      vx: Math.cos(sideAngle) * speed,
+      vy: Math.sin(sideAngle) * speed,
+      angle: Math.random() * Math.PI * 2,
+      spin: (Math.random() - 0.5) * 8,
+      size: baseSize * (0.6 + Math.random() * 0.5),
+      alpha: 1,
+      life: 0.4 + Math.random() * 0.35,
+      color: '#1a1a1a',
+      gravity: 120,
     })
   }
 }
