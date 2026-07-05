@@ -4,6 +4,9 @@
  * via updateAndDrawEffects(); no separate rAF loop is used.
  */
 
+import { registerTear } from './tears'
+import { queryGlyphsNear, type CachedGlyph } from './glyph-cache'
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface Bullet {
@@ -192,8 +195,12 @@ function updateBullets(dt: number, w: number, h: number, confAt: (x: number, y: 
     const isInsideNow = conf > 0.45
 
     if (b.wasInsidePerson && !isInsideNow) {
-      // Exited person silhouette → directional burst + tear
-      spawnExitBurst(b.x, b.y, b.vx, b.vy)
+      const bulletAngle = Math.atan2(b.vy, b.vx)
+      const rx = particleFontSize * 4
+      const ry = particleFontSize * 1.8
+      const tornGlyphs = queryGlyphsNear(b.x, b.y, rx, ry, bulletAngle, 10)
+      registerTear(b.x, b.y, bulletAngle, particleFontSize)
+      spawnExitBurst(b.x, b.y, b.vx, b.vy, tornGlyphs)
     }
     b.wasInsidePerson = isInsideNow
 
@@ -252,14 +259,41 @@ function spawnMuzzleFlash(mx: number, my: number): void {
   }
 }
 
-function spawnExitBurst(ex: number, ey: number, bulletVx: number, bulletVy: number): void {
-  const bulletAngle = Math.atan2(bulletVy, bulletVx) // direction of travel
+function spawnExitBurst(
+  ex: number,
+  ey: number,
+  bulletVx: number,
+  bulletVy: number,
+  tornGlyphs: CachedGlyph[] = [],
+): void {
+  const bulletAngle = Math.atan2(bulletVy, bulletVx)
   const baseSize = particleFontSize
 
+  // ── Torn glyphs: real letters ripped from the layout ───────────────────────
+  for (const g of tornGlyphs) {
+    const gx = g.x + g.w / 2
+    const gy = g.y + g.h / 2
+    const tearAngle = bulletAngle + (Math.random() * 2 - 1) * (Math.PI * 0.25)
+    const speed = 280 + Math.random() * 320
+    particles.push({
+      char: g.char,
+      x: gx,
+      y: gy,
+      vx: Math.cos(tearAngle) * speed,
+      vy: Math.sin(tearAngle) * speed,
+      angle: Math.random() * Math.PI * 2,
+      spin: (Math.random() - 0.5) * 12,
+      size: baseSize * (0.9 + Math.random() * 0.4),
+      alpha: 1,
+      life: 0.75 + Math.random() * 0.45,
+      color: '#1a1a1a',
+      gravity: 80,
+    })
+  }
+
   // ── Main spray: fan in the bullet's forward direction ──────────────────────
-  // Spray cone is ±70° around bullet direction (mostly forward, not firework)
   const sprayCone = (Math.PI * 70) / 180
-  const sprayCount = 18
+  const sprayCount = tornGlyphs.length > 0 ? 8 : 18
   for (let i = 0; i < sprayCount; i++) {
     const angle = bulletAngle + (Math.random() * 2 - 1) * sprayCone
     const speed = 160 + Math.random() * 300
@@ -279,32 +313,8 @@ function spawnExitBurst(ex: number, ey: number, bulletVx: number, bulletVy: numb
     })
   }
 
-  // ── Tear letters: fast particles tight to bullet direction ─────────────────
-  // These simulate text being ripped out — tightly clustered forward spray
-  const tearCount = 6
-  for (let i = 0; i < tearCount; i++) {
-    const tearAngle = bulletAngle + (Math.random() * 2 - 1) * (Math.PI * 0.2)
-    const speed = 350 + Math.random() * 350
-    // Offset them slightly behind the exit point (inside the object edge)
-    const offsetDist = Math.random() * 14
-    particles.push({
-      char: randomChar(),
-      x: ex - Math.cos(bulletAngle) * offsetDist + (Math.random() - 0.5) * 10,
-      y: ey - Math.sin(bulletAngle) * offsetDist + (Math.random() - 0.5) * 10,
-      vx: Math.cos(tearAngle) * speed,
-      vy: Math.sin(tearAngle) * speed,
-      angle: Math.random() * Math.PI * 2,
-      spin: (Math.random() - 0.5) * 14,
-      size: baseSize * (1.0 + Math.random() * 0.8),
-      alpha: 1,
-      life: 0.8 + Math.random() * 0.5,
-      color: '#1a1a1a',
-      gravity: 70,
-    })
-  }
-
-  // ── Side scatter: a few letters perpendicular to bullet for "shrapnel" ─────
-  const sideCount = 4
+  // ── Side scatter: shrapnel perpendicular to bullet ─────────────────────────
+  const sideCount = tornGlyphs.length > 0 ? 2 : 4
   for (let i = 0; i < sideCount; i++) {
     const sideSign = i % 2 === 0 ? 1 : -1
     const sideAngle = bulletAngle + sideSign * (Math.PI * 0.5 + Math.random() * 0.4)

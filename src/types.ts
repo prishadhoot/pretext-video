@@ -1,5 +1,9 @@
 export type Point = { x: number; y: number }
 
+export type Interval = { left: number; right: number }
+
+export type LayoutSegment = Interval & { width: number }
+
 export type PositionedLine = {
   text: string
   x: number

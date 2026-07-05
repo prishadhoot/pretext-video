@@ -1,8 +1,10 @@
 import type { AppMode } from './types'
-import { layoutNextLine, type LayoutCursor } from '@chenglou/pretext'
-import { getPrepared, layoutRectangular } from './text-layout'
+import { layoutNextLine, type LayoutCursor, type PreparedTextWithSegments } from '@chenglou/pretext'
+import { getPrepared, layoutRectangular, subtractIntervals } from './text-layout'
 import { texts, defaultTextKey } from './texts'
 import { updateAndDrawEffects, setRevolverText } from './revolver'
+import { updateTears, getExclusionsAtY } from './tears'
+import { clearGlyphCache, addGlyph } from './glyph-cache'
 
 let canvas: HTMLCanvasElement
 let ctx: CanvasRenderingContext2D
@@ -170,6 +172,49 @@ function getPersonBoundsAtY(yStart: number, yEnd: number, canvasW: number, canva
   return { left: globalLeft, right: globalRight }
 }
 
+/** Layout Pretext lines into drawable segments and invoke drawChar per glyph. */
+function layoutSegments(
+  prepared: PreparedTextWithSegments,
+  cursor: LayoutCursor,
+  segments: { left: number; width: number }[],
+  y: number,
+  minWidth: number,
+  drawChar: (char: string, x: number, y: number, w: number) => void,
+): LayoutCursor | null {
+  for (const seg of segments) {
+    if (seg.width < minWidth) continue
+    const line = layoutNextLine(prepared, cursor, seg.width)
+    if (!line) return null
+
+    let charX = seg.left
+    for (const char of line.text) {
+      const charW = ctx.measureText(char).width
+      drawChar(char, charX, y, charW)
+      charX += charW
+    }
+    cursor = line.end
+  }
+  return cursor
+}
+
+/** Layout segments and draw each line as a single fillText call (cutout mode). */
+function layoutSegmentsFillText(
+  prepared: PreparedTextWithSegments,
+  cursor: LayoutCursor,
+  segments: { left: number; width: number }[],
+  y: number,
+  minWidth: number,
+): LayoutCursor | null {
+  for (const seg of segments) {
+    if (seg.width < minWidth) continue
+    const line = layoutNextLine(prepared, cursor, seg.width)
+    if (!line) return null
+    ctx.fillText(line.text, seg.left, y)
+    cursor = line.end
+  }
+  return cursor
+}
+
 // ─── Text Face Mode ─────────────────────────────────────────────
 
 
@@ -186,8 +231,11 @@ function renderTextFaceMode() {
   updateFont()
 
   if (sampleData && personMask) {
+    clearGlyphCache()
+
     // Layout text INSIDE person shape using variable-width reflow
     const innerMargin = fontSize * 0.3
+    const minSegWidth = fontSize * 0.8
     const charsNeeded = Math.ceil((w * h) / (fontSize * fontSize * 0.3))
     const repeatedText = getRepeatedText(baseText, charsNeeded)
     const prepared = getPrepared(repeatedText, font)
@@ -201,34 +249,44 @@ function renderTextFaceMode() {
       const bounds = getPersonBoundsAtY(y, y + lineHeight, w, h)
       if (!bounds) continue
 
-      const availWidth = bounds.right - bounds.left - innerMargin * 2
-      if (availWidth < fontSize * 3) continue
+      const innerLeft = bounds.left + innerMargin
+      const innerRight = bounds.right - innerMargin
+      if (innerRight - innerLeft < fontSize * 3) continue
 
-      const line = layoutNextLine(prepared, cursor, availWidth)
-      if (!line) break
+      const exclusions = getExclusionsAtY(y, y + lineHeight)
+      const segments = subtractIntervals(
+        { left: innerLeft, right: innerRight },
+        exclusions,
+        minSegWidth,
+      )
+      if (!segments.length) continue
 
-      // Draw each character colored by video pixel
-      let charX = bounds.left + innerMargin
-      for (const char of line.text) {
-        const charW = ctx.measureText(char).width
-        const centerX = charX + charW / 2
-        const centerY = y + lineHeight / 2
+      const nextCursor = layoutSegments(
+        prepared,
+        cursor,
+        segments,
+        y,
+        minSegWidth,
+        (char, charX, charY, charW) => {
+          const centerX = charX + charW / 2
+          const centerY = charY + lineHeight / 2
 
-        const { r, g, b, lum } = samplePixel(centerX, centerY)
-        const personConf = isPersonAt(centerX, centerY, w, h)
-        const lumAlpha = Math.pow(1 - lum, 0.6)
-        const alpha = Math.max(0.05, lumAlpha * Math.min(1, personConf * 1.5))
+          const { r, g, b, lum } = samplePixel(centerX, centerY)
+          const personConf = isPersonAt(centerX, centerY, w, h)
+          const lumAlpha = Math.pow(1 - lum, 0.6)
+          const alpha = Math.max(0.05, lumAlpha * Math.min(1, personConf * 1.5))
 
-        const dr = Math.round(r * 0.4)
-        const dg = Math.round(g * 0.4)
-        const db = Math.round(b * 0.4)
+          const dr = Math.round(r * 0.4)
+          const dg = Math.round(g * 0.4)
+          const db = Math.round(b * 0.4)
 
-        ctx.fillStyle = `rgba(${dr},${dg},${db},${alpha})`
-        ctx.fillText(char, charX, y)
-        charX += charW
-      }
-
-      cursor = line.end
+          ctx.fillStyle = `rgba(${dr},${dg},${db},${alpha})`
+          ctx.fillText(char, charX, charY)
+          addGlyph(char, charX, charY, charW, lineHeight)
+        },
+      )
+      if (!nextCursor) break
+      cursor = nextCursor
     }
   } else {
     renderEditorialLayout(w, h)
@@ -297,9 +355,12 @@ function renderCutoutMode() {
   updateFont()
 
   if (personMask && videoElement && videoElement.readyState >= 2) {
+    clearGlyphCache()
+
     // ── Reflow text around person using layoutNextLine() ──
     const margin = Math.max(fontSize * 2, 20)
     const padding = 4
+    const minSegWidth = fontSize * 2
     const charsNeeded = Math.ceil((w * h) / (fontSize * fontSize * 0.3))
     const repeatedText = getRepeatedText(baseText, charsNeeded)
     const prepared = getPrepared(repeatedText, font)
@@ -321,33 +382,31 @@ function renderCutoutMode() {
 
     for (let y = padding; y + lineHeight <= h; y += lineHeight) {
       const bounds = getPersonBoundsAtY(y, y + lineHeight, w, h)
+      const exclusions = getExclusionsAtY(y, y + lineHeight)
 
       if (!bounds) {
-        // No person at this line — full width
-        const line = layoutNextLine(prepared, leftCursor, w - padding * 2)
-        if (!line) break
-        ctx.fillText(line.text, padding, y)
-        leftCursor = line.end
+        const segments = subtractIntervals(
+          { left: padding, right: w - padding },
+          exclusions,
+          minSegWidth,
+        )
+        const next = layoutSegmentsFillText(prepared, leftCursor, segments, y, minSegWidth)
+        if (!next) break
+        leftCursor = next
       } else {
-        const leftWidth = bounds.left - margin - padding
-        const rightWidth = w - bounds.right - margin - padding
+        const leftBase = { left: padding, right: bounds.left - margin }
+        const rightBase = { left: bounds.right + margin, right: w - padding }
 
-        // Left side (skip if too narrow for readable text)
-        if (leftWidth > fontSize * 8) {
-          const line = layoutNextLine(prepared, leftCursor, leftWidth)
-          if (line) {
-            ctx.fillText(line.text, padding, y)
-            leftCursor = line.end
-          }
+        const leftSegments = subtractIntervals(leftBase, exclusions, minSegWidth)
+        if (leftSegments.length && leftBase.right - leftBase.left > fontSize * 8) {
+          const next = layoutSegmentsFillText(prepared, leftCursor, leftSegments, y, minSegWidth)
+          if (next) leftCursor = next
         }
 
-        // Right side
-        if (rightWidth > fontSize * 8) {
-          const line = layoutNextLine(prepared, rightCursor, rightWidth)
-          if (line) {
-            ctx.fillText(line.text, bounds.right + margin, y)
-            rightCursor = line.end
-          }
+        const rightSegments = subtractIntervals(rightBase, exclusions, minSegWidth)
+        if (rightSegments.length && rightBase.right - rightBase.left > fontSize * 8) {
+          const next = layoutSegmentsFillText(prepared, rightCursor, rightSegments, y, minSegWidth)
+          if (next) rightCursor = next
         }
       }
     }
@@ -414,6 +473,8 @@ function render(timestamp: number) {
   ctx.clearRect(0, 0, w, h)
   ctx.fillStyle = '#f5f3ef'
   ctx.fillRect(0, 0, w, h)
+
+  updateTears(dt)
 
   if (currentMode === 'textface') {
     renderTextFaceMode()

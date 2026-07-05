@@ -5,7 +5,7 @@ import {
   type PreparedTextWithSegments,
   type LayoutCursor,
 } from '@chenglou/pretext'
-import type { Point, PositionedLine } from './types'
+import type { Point, PositionedLine, Interval, LayoutSegment } from './types'
 
 const preparedCache = new Map<string, PreparedTextWithSegments>()
 
@@ -19,6 +19,48 @@ export function getPrepared(text: string, font: string): PreparedTextWithSegment
   }
   preparedCache.set(key, prepared)
   return prepared
+}
+
+/**
+ * Subtract exclusion intervals from a base interval, returning drawable segments.
+ */
+export function subtractIntervals(
+  base: Interval,
+  exclusions: Interval[],
+  minWidth = 0,
+): LayoutSegment[] {
+  if (base.right <= base.left) return []
+
+  const clipped = exclusions
+    .map(ex => ({
+      left: Math.max(base.left, ex.left),
+      right: Math.min(base.right, ex.right),
+    }))
+    .filter(ex => ex.right > ex.left)
+    .sort((a, b) => a.left - b.left)
+
+  if (!clipped.length) {
+    const width = base.right - base.left
+    return width >= minWidth ? [{ left: base.left, right: base.right, width }] : []
+  }
+
+  const segments: LayoutSegment[] = []
+  let cursor = base.left
+
+  for (const ex of clipped) {
+    if (ex.left > cursor) {
+      const width = ex.left - cursor
+      if (width >= minWidth) segments.push({ left: cursor, right: ex.left, width })
+    }
+    cursor = Math.max(cursor, ex.right)
+  }
+
+  if (cursor < base.right) {
+    const width = base.right - cursor
+    if (width >= minWidth) segments.push({ left: cursor, right: base.right, width })
+  }
+
+  return segments
 }
 
 /**
