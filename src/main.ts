@@ -9,6 +9,7 @@ import {
   setPersonMask,
   getCanvas,
 } from './renderer'
+import { initRevolver, getRevolverBounds, fire } from './revolver'
 import { initSegmentation, segmentPerson, isSegmentationReady } from './segmentation'
 import { startRecording, stopRecording, isRecording } from './recorder'
 import { texts, defaultTextKey } from './texts'
@@ -82,10 +83,36 @@ waitForFonts().then(async () => {
   initRenderer(canvas)
   setTextKey(defaultTextKey)
   setFontSize(parseInt(fontSizeSlider.value))
+  initRevolver('/revolver.webp')
   startRenderLoop()
 
   // Auto-start camera and preload AI model on page load
   await startCamera()
+})
+
+// ─── Revolver interaction ────────────────────────────────────────────────────
+
+function getCanvasCSSCoords(e: PointerEvent): { x: number; y: number } {
+  const rect = canvas.getBoundingClientRect()
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+}
+
+canvas.addEventListener('pointerdown', (e: PointerEvent) => {
+  const { x, y } = getCanvasCSSCoords(e)
+  const b = getRevolverBounds()
+  // Expand hit area slightly for easier clicking
+  const hit = x >= b.x - 8 && x <= b.x + b.w + 8 && y >= b.y - 8 && y <= b.y + b.h + 8
+  if (hit) {
+    e.preventDefault()
+    fire()
+  }
+})
+
+canvas.addEventListener('pointermove', (e: PointerEvent) => {
+  const { x, y } = getCanvasCSSCoords(e)
+  const b = getRevolverBounds()
+  const over = x >= b.x - 8 && x <= b.x + b.w + 8 && y >= b.y - 8 && y <= b.y + b.h + 8
+  canvas.style.cursor = over ? 'pointer' : ''
 })
 
 // Disable record button on unsupported browsers

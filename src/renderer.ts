@@ -2,10 +2,12 @@ import type { AppMode } from './types'
 import { layoutNextLine, type LayoutCursor } from '@chenglou/pretext'
 import { getPrepared, layoutRectangular } from './text-layout'
 import { texts, defaultTextKey } from './texts'
+import { updateAndDrawEffects, setRevolverText } from './revolver'
 
 let canvas: HTMLCanvasElement
 let ctx: CanvasRenderingContext2D
 let animationId: number | null = null
+let lastTimestamp: number | null = null
 
 // Offscreen canvas for sampling video pixels
 let sampleCanvas: OffscreenCanvas | null = null
@@ -53,6 +55,12 @@ export function setFontSize(size: number) {
 }
 export function setVideoElement(video: HTMLVideoElement | null) { videoElement = video }
 export function setPersonMask(mask: ImageData | null) { personMask = mask }
+
+/** Public wrapper around isPersonAt for use by revolver effects. */
+export function personConfAt(x: number, y: number): number {
+  const rect = canvas.getBoundingClientRect()
+  return isPersonAt(x, y, rect.width, rect.height)
+}
 
 function getCurrentText(): string {
   if (currentTextKey === 'custom') return customText
@@ -395,11 +403,17 @@ function renderEditorialLayout(w: number, h: number) {
 
 // ─── Render Loop ────────────────────────────────────────────────
 
-function render() {
+function render(timestamp: number) {
+  const dt = lastTimestamp !== null ? Math.min((timestamp - lastTimestamp) / 1000, 0.1) : 0
+  lastTimestamp = timestamp
+
   const rect = canvas.getBoundingClientRect()
-  ctx.clearRect(0, 0, rect.width, rect.height)
+  const w = rect.width
+  const h = rect.height
+
+  ctx.clearRect(0, 0, w, h)
   ctx.fillStyle = '#f5f3ef'
-  ctx.fillRect(0, 0, rect.width, rect.height)
+  ctx.fillRect(0, 0, w, h)
 
   if (currentMode === 'textface') {
     renderTextFaceMode()
@@ -407,12 +421,19 @@ function render() {
     renderCutoutMode()
   }
 
+  // Keep revolver particle text in sync with the active passage
+  setRevolverText(getCurrentText())
+
+  // Draw revolver, bullets, and particle effects above all text
+  updateAndDrawEffects(ctx, w, h, dt, personConfAt)
+
   animationId = requestAnimationFrame(render)
 }
 
 export function startRenderLoop() {
   if (animationId !== null) return
-  render()
+  lastTimestamp = null
+  animationId = requestAnimationFrame(render)
 }
 
 export function stopRenderLoop() {
